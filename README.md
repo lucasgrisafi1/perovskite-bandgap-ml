@@ -37,7 +37,17 @@ radius, valence electrons):
 | 4 | Mean valence electrons (stoich-weighted) | band filling |
 | 5 | Max/min radius ratio | structural distortion proxy |
 
-## Results (Python mirror, verified run — 80/20 split, seed 42)
+## Results
+
+**MATLAB (primary, R2024+ run — 80/20 holdout, rng 42, 1045 train / 261 test):**
+
+| Model | R² | RMSE (eV) |
+|-------|------|-----------|
+| Linear Regression (`fitlm`) | 0.231 | 1.331 |
+| **Random Forest (`TreeBagger`, 100 trees)** | **0.542** | **1.028** |
+| SVM RBF (`fitrsvm`) | 0.523 | 1.048 |
+
+**Python mirror (numpy-only, 80/20 split, seed 42):**
 
 | Model | R² | RMSE (eV) |
 |-------|------|-----------|
@@ -45,17 +55,19 @@ radius, valence electrons):
 | **Random Forest (100 trees)** | **0.600** | **1.029** |
 | Kernel Ridge / SVR (RBF) | 0.481 | 1.172 |
 
-Random Forest beats the linear baseline by **2.5× in R²**, confirming the
-band gap–composition relationship is strongly nonlinear. Permutation
-importance ranks **mean electronegativity** first (ΔRMSE +0.48 eV when
-permuted), then mean valence (+0.37), std EN (+0.33), radius ratio
-(+0.30), mean radius (+0.22) — consistent with the orbital-overlap
-hypothesis. For reference, Pilania et al. reach RMSE ≈ 0.5–0.6 eV using
+In both implementations Random Forest beats the linear baseline by
+**2.3–2.5× in R²**, confirming the band gap–composition relationship is
+strongly nonlinear. Python test-set permutation importance ranks **mean
+electronegativity** first (ΔRMSE +0.48 eV when permuted); MATLAB's OOB
+permutation importance ranks **std EN** and **mean radius** highest — the
+five descriptors are correlated, so importance orderings shuffle across
+splits/methods while electronegativity and size features consistently
+dominate. For reference, Pilania et al. reach RMSE ≈ 0.5–0.6 eV using
 ~20 features including DFT-derived inputs; this model uses only 5
 formula-derived descriptors.
 
-![Predicted vs actual](output/predicted_vs_actual_python.png)
-![Feature importance](output/feature_importance_python.png)
+![Predicted vs actual](output/predicted_vs_actual.png)
+![Feature importance](output/feature_importance.png)
 
 ## How to run
 
@@ -82,12 +94,4 @@ python/    bandgap_pipeline.py, element_data.py
 output/    figures + model comparison tables
 ```
 
-## Notes
-
-- Python "SVR" is RBF kernel ridge (same kernel family as MATLAB's
-  `fitrsvm`) so the mirror has zero external ML dependencies.
-- MATLAB and Python use different random splits, so metrics will differ
-  slightly between the two — that's expected.
-- Extension ideas: A-site/B-site-resolved features (the dataset includes
-  site assignments), formation energy as a feature, tolerance factor,
-  graph neural networks on structure.
+##
