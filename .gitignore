@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.asv
+*.mat
+.DS_Store
+_broken_git_ignore/
