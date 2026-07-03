@@ -44,6 +44,10 @@ for i = 1:n_compounds
     radius  = zeros(1, numel(elements));
     valence = zeros(1, numel(elements));
     for j = 1:numel(elements)
+        if ~isfield(props, elements{j})
+            error('No element data for ''%s'' in formula ''%s''.', ...
+                elements{j}, formula);
+        end
         ep = props.(elements{j});
         EN(j)      = ep(2);
         radius(j)  = ep(3);
@@ -58,17 +62,22 @@ for i = 1:n_compounds
     X(i,5) = max(radius) / min(radius);          % radius ratio
 end
 
-%% ── 3. Clean, normalize, split ─────────────────────────────────────────
+%% ── 3. Clean, split, THEN normalize ───────────────────────────────────
 valid = all(~isnan(X), 2) & ~isnan(y);
 X = X(valid, :);  y = y(valid);
 fprintf('Final dataset: %d compounds\n', length(y));
 
-[X_norm, mu, sigma] = zscore(X);   % save mu/sigma to score new compounds
-
 rng(42);                           % reproducible split
 cv = cvpartition(length(y), 'HoldOut', 0.2);
-X_tr = X_norm(cv.training, :);  y_tr = y(cv.training);
-X_te = X_norm(cv.test,     :);  y_te = y(cv.test);
+
+% Normalize using TRAINING statistics only. zscore() on the full matrix
+% before splitting leaked test-set mean/std into training (data leakage).
+% mu/sigma are kept to score new compounds.
+mu    = mean(X(cv.training, :), 1);
+sigma = std(X(cv.training, :), 0, 1);
+sigma(sigma == 0) = 1;             % guard constant features
+X_tr = (X(cv.training, :) - mu) ./ sigma;  y_tr = y(cv.training);
+X_te = (X(cv.test,     :) - mu) ./ sigma;  y_te = y(cv.test);
 fprintf('Train: %d  Test: %d\n', sum(cv.training), sum(cv.test));
 
 %% ── 4. Train three models ──────────────────────────────────────────────
@@ -87,7 +96,10 @@ yhat_rf = predict(mdl_rf, X_te);   % regression TreeBagger returns doubles
 [R2_rf, RMSE_rf] = compute_metrics(y_te, yhat_rf);
 
 % Model 3: Support Vector Regression (RBF kernel)
-mdl_svm  = fitrsvm(X_tr, y_tr, 'KernelFunction', 'rbf', 'Standardize', false);
+% KernelScale 'auto' picks the scale heuristically instead of the default
+% of 1, which under-fits when features have different effective spreads.
+mdl_svm  = fitrsvm(X_tr, y_tr, 'KernelFunction', 'rbf', ...
+    'KernelScale', 'auto', 'Standardize', false);
 yhat_svm = predict(mdl_svm, X_te);
 [R2_svm, RMSE_svm] = compute_metrics(y_te, yhat_svm);
 

@@ -47,6 +47,16 @@ def parse_formula(formula):
 def featurize(formula):
     """5 compositional descriptors capturing orbital-overlap physics."""
     elements, counts = parse_formula(formula)
+    # Validate: regex silently drops anything it can't match, and an
+    # unknown element would raise a bare KeyError deep in the lookup.
+    consumed = "".join(
+        e + (str(c) if c > 1 else "") for e, c in zip(elements, counts)
+    )
+    if consumed != formula:
+        raise ValueError(f"Could not fully parse formula: {formula!r}")
+    unknown = [e for e in elements if e not in ELEMENT_PROPS]
+    if unknown:
+        raise ValueError(f"No element data for {unknown} in {formula!r}")
     props = np.array([ELEMENT_PROPS[e][1:] for e in elements], dtype=float)
     en, radius, valence = props[:, 0], props[:, 1], props[:, 2]
     w = np.array(counts, dtype=float)
@@ -188,14 +198,38 @@ def permutation_importance(model, X, y, seed=42, n_repeats=10):
     return imp / n_repeats
 
 
+def tune_krr(X, y, n_folds=5, seed=42):
+    """Grid-search KRR (alpha, gamma) by K-fold CV on the training set."""
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(len(y))
+    folds = np.array_split(idx, n_folds)
+    d = X.shape[1]
+    best = (1.0, 1.0 / d, np.inf)
+    for alpha in (0.01, 0.1, 1.0, 10.0):
+        for gamma in (0.25 / d, 1.0 / d, 4.0 / d):
+            rmses = []
+            for k in range(n_folds):
+                va = folds[k]
+                trn = np.concatenate([folds[j] for j in range(n_folds) if j != k])
+                m = KernelRidgeRBF(alpha=alpha, gamma=gamma).fit(X[trn], y[trn])
+                rmses.append(compute_metrics(y[va], m.predict(X[va]))[1])
+            mean_rmse = float(np.mean(rmses))
+            if mean_rmse < best[2]:
+                best = (alpha, gamma, mean_rmse)
+    return best
+
+
 # ── Pipeline ─────────────────────────────────────────────────────────────────
 def main():
     os.makedirs(OUT, exist_ok=True)
 
-    # Load + filter
+    # Load + filter (tolerate blank/missing gap values instead of crashing)
     with open(DATA) as f:
         rows = list(csv.DictReader(f))
-    rows = [r for r in rows if float(r["gap_gllbsc"]) > 0]
+    rows = [
+        r for r in rows
+        if r.get("gap_gllbsc", "").strip() and float(r["gap_gllbsc"]) > 0
+    ]
     print(f"Compounds after filtering (gap > 0): {len(rows)}")
 
     X = np.array([featurize(r["formula"]) for r in rows])
@@ -205,21 +239,28 @@ def main():
     X, y = X[valid], y[valid]
     print(f"Final dataset: {len(y)} compounds, {X.shape[1]} features, no NaNs")
 
-    # Normalize + split 80/20 (reproducible)
-    mu, sigma = X.mean(0), X.std(0, ddof=1)
-    Xn = (X - mu) / sigma
+    # Split 80/20 FIRST, then normalize with train-only statistics.
+    # (Normalizing before the split leaks test-set statistics into
+    # training — a small but real form of data leakage.)
     rng = np.random.default_rng(42)
     perm = rng.permutation(len(y))
     n_test = int(round(0.2 * len(y)))
     te, tr = perm[:n_test], perm[n_test:]
-    X_tr, y_tr, X_te, y_te = Xn[tr], y[tr], Xn[te], y[te]
+    mu, sigma = X[tr].mean(0), X[tr].std(0, ddof=1)
+    sigma[sigma == 0] = 1.0                      # guard constant features
+    X_tr, y_tr = (X[tr] - mu) / sigma, y[tr]
+    X_te, y_te = (X[te] - mu) / sigma, y[te]
     print(f"Train: {len(tr)}  Test: {len(te)}")
+
+    # Tune KRR hyperparameters by 5-fold CV on the training set only
+    alpha, gamma, cv_rmse = tune_krr(X_tr, y_tr)
+    print(f"KRR tuned: alpha={alpha:g}, gamma={gamma:g} (CV RMSE={cv_rmse:.3f})")
 
     # Train 3 models
     models = {
         "Linear Regression": LinearRegressionNP().fit(X_tr, y_tr),
         "Random Forest": RandomForestNP(100, 5, seed=42).fit(X_tr, y_tr),
-        "Kernel Ridge (RBF)": KernelRidgeRBF(alpha=1.0).fit(X_tr, y_tr),
+        "Kernel Ridge (RBF)": KernelRidgeRBF(alpha=alpha, gamma=gamma).fit(X_tr, y_tr),
     }
 
     results, preds = {}, {}

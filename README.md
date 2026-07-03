@@ -94,4 +94,12 @@ python/    bandgap_pipeline.py, element_data.py
 output/    figures + model comparison tables
 ```
 
-##
+## Notes
+
+- Python "SVR" is RBF kernel ridge (same kernel family as MATLAB's
+  `fitrsvm`) so the mirror has zero external ML dependencies.
+- MATLAB and Python use different random splits, so metrics will differ
+  slightly between the two — that's expected.
+- Extension ideas: A-site/B-site-resolved features (the dataset includes
+  site assignments), formation energy as a feature, tolerance factor,
+  graph neural networks on structure.
