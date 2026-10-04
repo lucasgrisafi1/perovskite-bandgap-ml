@@ -20,9 +20,11 @@ def compute_metrics(y_true, y_pred):
 def group_ids(sites):
     """Integer group per compound; key = (sorted A pair, sorted B pair).
 
-    `sites` is a sequence of (a1, b1, a2, b2). Compounds that differ only
-    by relabelling which A (or B) cation is called 1 vs 2 describe the
-    same material and must never be split across train and test.
+    `sites` is a sequence of (a1, b1, a2, b2). Compounds with the same
+    two A cations and the same two B cations (differing only in which A
+    is paired with which B) have identical site features; 51 of the 87
+    such pairs in the dataset are near-duplicates (gaps within 5 meV).
+    Keeping each group on one side of every split prevents leakage.
     """
     keys = [(tuple(sorted((a1, a2))), tuple(sorted((b1, b2)))) for a1, b1, a2, b2 in sites]
     lookup = {k: i for i, k in enumerate(dict.fromkeys(keys))}
@@ -52,14 +54,21 @@ def _standardize(X_tr, X_te):
     return (X_tr - mu) / sigma, (X_te - mu) / sigma
 
 
-def cross_validate(factory, X, y, groups, k=5, seed=42):
-    """Grouped K-fold CV. Returns per-fold metrics, means/stds and OOF predictions."""
+def cross_validate(factory, X, y, groups, k=5, seed=42, on_fold=None):
+    """Grouped K-fold CV. Returns per-fold metrics, means/stds and OOF predictions.
+
+    on_fold(model, X_test_scaled, y_test), if given, is called once per
+    fold (e.g. to compute permutation importance on held-out data).
+    """
     oof = np.empty(len(y))
     per_fold = []
     for te in group_kfold(groups, k, seed):
         tr = np.setdiff1d(np.arange(len(y)), te)
         X_tr, X_te = _standardize(X[tr], X[te])
-        oof[te] = factory(X_tr, y[tr]).predict(X_te)
+        model = factory(X_tr, y[tr])
+        oof[te] = model.predict(X_te)
+        if on_fold is not None:
+            on_fold(model, X_te, y[te])
         per_fold.append(compute_metrics(y[te], oof[te]))
     per_fold = np.array(per_fold)
     out = {"oof": oof}
@@ -93,14 +102,22 @@ def leave_element_out(factory, X, y, sites, elements=None):
     return {"r2": r2, "rmse": rmse_pooled, "mae": mae, "rmse_by_element": rmse, "n_test": n_test}
 
 
-def permutation_importance(predict, X, y, n_repeats=10, seed=42):
-    """Mean increase in RMSE when each column of X is shuffled."""
+def permutation_importance(predict, X, y, column_groups=None, n_repeats=10, seed=42):
+    """Mean increase in RMSE when a column (or group of columns) is shuffled.
+
+    column_groups: list of column-index lists permuted together (rows are
+    shuffled jointly, so within-group relationships are preserved). This
+    gives a fair importance for correlated families such as the min/max/
+    mean of one property. Defaults to one group per column.
+    """
+    if column_groups is None:
+        column_groups = [[j] for j in range(X.shape[1])]
     rng = np.random.default_rng(seed)
     base = compute_metrics(y, predict(X))[1]
-    imp = np.zeros(X.shape[1])
-    for f in range(X.shape[1]):
+    imp = np.zeros(len(column_groups))
+    for g, cols in enumerate(column_groups):
         for _ in range(n_repeats):
             Xp = X.copy()
-            Xp[:, f] = rng.permutation(Xp[:, f])
-            imp[f] += compute_metrics(y, predict(Xp))[1] - base
+            Xp[:, cols] = X[rng.permutation(len(X))][:, cols]
+            imp[g] += compute_metrics(y, predict(Xp))[1] - base
     return imp / n_repeats

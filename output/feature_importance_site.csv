@@ -1,0 +1,22 @@
+feature_family,dRMSE_mean_eV,dRMSE_sd_eV
+A_ox_sum,0.4187,0.0879
+A-site group,0.2935,0.0257
+B-site r_ion,0.2690,0.0417
+B-site en,0.2655,0.0481
+B-site ie1,0.1712,0.0214
+A-site ea,0.1520,0.0079
+A-site ie1,0.1365,0.0229
+A_lone_pair_count,0.1191,0.0402
+A-site en,0.1161,0.0224
+B-site group,0.1021,0.0231
+octahedral_factor,0.0995,0.0096
+A-site n_d,0.0993,0.0314
+dEN_O_minus_A,0.0530,0.0242
+B-site ea,0.0436,0.0146
+B-site period,0.0213,0.0083
+dEN_O_minus_B,0.0200,0.0111
+B_r_mismatch,0.0179,0.0054
+A-site r_ion,0.0169,0.0030
+A-site period,0.0096,0.0007
+B-site n_d,0.0083,0.0024
+tolerance_factor,0.0059,0.0027

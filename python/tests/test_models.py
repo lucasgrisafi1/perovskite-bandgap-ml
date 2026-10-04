@@ -1,6 +1,6 @@
 import numpy as np
 
-from models import KernelRidgeRBF, LinearRegressionNP, RandomForestNP, tune_krr
+from models import KRR_ALPHAS, KRR_GAMMA_MULTIPLIERS, KernelRidgeRBF, LinearRegressionNP, RandomForestNP, tune_krr
 
 
 def test_linear_recovers_exact_coefficients():
@@ -40,8 +40,8 @@ def test_tune_krr_returns_grid_values():
     X = rng.normal(size=(60, 3))
     y = X[:, 0] ** 2
     alpha, gamma, cv_rmse = tune_krr(X, y, n_folds=3)
-    assert alpha in (0.01, 0.1, 1.0, 10.0)
-    assert gamma in (0.25 / 3, 1.0 / 3, 4.0 / 3)
+    assert alpha in KRR_ALPHAS
+    assert gamma in tuple(m / 3 for m in KRR_GAMMA_MULTIPLIERS)
     assert cv_rmse > 0
 
 

@@ -141,8 +141,8 @@ class KernelRidgeRBF:
         return self._kernel(X, self.X) @ self.dual
 
 
-KRR_ALPHAS = (0.01, 0.1, 1.0, 10.0)
-KRR_GAMMA_MULTIPLIERS = (0.25, 1.0, 4.0)  # times 1 / n_features
+KRR_ALPHAS = (0.001, 0.01, 0.1, 1.0, 10.0)
+KRR_GAMMA_MULTIPLIERS = (0.1, 0.25, 1.0, 4.0)  # times 1 / n_features
 
 
 def tune_krr(X, y, n_folds=5, seed=42):

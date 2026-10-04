@@ -14,8 +14,10 @@ states and the A site tunes the lattice. Consequences observed:
 - Oxygen (fixed 6/10 weight, always the smallest atom) makes three
   features affine transforms of cation means and turns "radius ratio"
   into "largest cation radius / 60 pm".
-- 90 pairs of site-relabelled duplicates (e.g. AgTaCsNbO6 /
-  CsTaAgNbO6, gaps equal to 1 meV) can straddle the train/test split.
+- 87 pairs share the same A pair and B pair (e.g. AgTaCsNbO6 /
+  CsTaAgNbO6); 51 are near-duplicates (gaps within 5 meV) and can
+  straddle the train/test split. (Corrected during implementation:
+  originally estimated as 90 duplicates.)
 - Single 80/20 split: R² varies ±0.02–0.03 between seeds.
 - README result tables predate the leakage fix and disagree with
   `output/*.csv`.
@@ -64,8 +66,7 @@ EN(O) − mean EN(B), EN(O) − mean EN(A). Total 49.
 
 ## Evaluation protocol
 
-- Group key = (sorted A pair, sorted B pair); site-relabelled
-  duplicates share a group.
+- Group key = (sorted A pair, sorted B pair); such pairs share a group.
 - 5-fold grouped CV (seeded shuffle of groups). Report mean ± std of
   per-fold R², RMSE, MAE plus pooled out-of-fold predictions for plots.
 - KRR hyperparameters tuned by inner 4-fold CV on each training fold.

@@ -1,0 +1,7 @@
+features,model,R2_mean,R2_sd,RMSE_mean_eV,RMSE_sd_eV,MAE_mean_eV,MAE_sd_eV
+baseline (5),Linear (OLS),0.2151,0.0355,1.3928,0.0912,1.1382,0.0784
+baseline (5),Random forest,0.5501,0.0409,1.0538,0.0806,0.8299,0.0554
+baseline (5),Kernel ridge (RBF),0.5539,0.0310,1.0508,0.0910,0.7916,0.0583
+site-resolved (49),Linear (OLS),0.8466,0.0175,0.6151,0.0516,0.4734,0.0379
+site-resolved (49),Random forest,0.9413,0.0202,0.3778,0.0764,0.2619,0.0335
+site-resolved (49),Kernel ridge (RBF),0.9609,0.0228,0.3040,0.0902,0.1991,0.0188

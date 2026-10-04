@@ -46,7 +46,7 @@ if exist(pyFeat, 'file')
     fprintf('Site features match Python to %.1e\n', maxDiff);
 end
 
-%% 3. Grouped folds (site-relabelled duplicates share a group)
+%% 3. Grouped folds (same A pair + same B pair -> same group; see README)
 pyFolds = fullfile(outDir, 'cv_folds.csv');
 if exist(pyFolds, 'file')
     F = readtable(pyFolds, 'TextType', 'char');

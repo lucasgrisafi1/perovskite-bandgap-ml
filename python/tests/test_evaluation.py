@@ -47,3 +47,16 @@ def test_leave_element_out_holds_out_every_compound_with_element():
 
     res = leave_element_out(factory, X, y, sites, elements=["Ba"])
     assert res["n_test"]["Ba"] == 10 and seen["train_sizes"] == [10]
+
+
+def test_permutation_importance_finds_signal_column_and_groups():
+    from evaluation import permutation_importance
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(200, 3))
+    y = 3 * X[:, 1]
+    predict = lambda Z: 3 * Z[:, 1]
+    imp = permutation_importance(predict, X, y)
+    assert imp.argmax() == 1 and imp[0] == 0 and imp[2] == 0
+    grouped = permutation_importance(predict, X, y, column_groups=[[0, 2], [1]])
+    assert grouped[0] == 0 and grouped[1] > 1
