@@ -1,159 +1,162 @@
-%% Materials Informatics: Perovskite Band Gap Predictor
-%  Predicts GLLB-SC band gaps of 1306 double perovskites (Pilania et al.,
-%  Sci. Rep. 2016, "Machine learning bandgaps of double perovskites";
-%  matminer dataset 'double_perovskites_gap') from 5 compositional
-%  descriptors. Trains and compares fitlm, TreeBagger, and fitrsvm.
+%% Perovskite band gap predictor — MATLAB implementation
+%  Predicts GLLB-SC band gaps of 1306 double perovskite oxides (Pilania et
+%  al., Sci. Rep. 6, 19375, 2016; matminer 'double_perovskites_gap') and
+%  compares two feature sets with fitlm, TreeBagger and fitrsvm:
 %
-%  Requires: Statistics and Machine Learning Toolbox
+%    baseline  5 site-blind composition averages (v1)
+%    site      49 A-site / B-site resolved descriptors
+%
+%  Mirrors python/pipeline.py (the verified reference). If the Python
+%  pipeline has been run, this script (1) checks its site features match
+%  Python's to 1e-9 and (2) reuses Python's CV folds so the numbers are
+%  directly comparable.
+%
+%  Requires: Statistics and Machine Learning Toolbox (R2021a+).
 %  Run from the matlab/ folder. Outputs go to ../output/.
-%
-%  Lucas Grisafi | GT MSE | Summer 2026 Project 2
 
 clear; clc; close all;
+outDir = fullfile('..', 'output');
+if ~exist(outDir, 'dir'), mkdir(outDir); end
+K = 5;
+SEED = 42;
 
-%% ── 1. Load and inspect data ───────────────────────────────────────────
-T = readtable(fullfile('..', 'data', 'double_perovskites_gap.csv'));
-
-disp(head(T, 5));
-disp(T.Properties.VariableNames);
-
-missing_counts = sum(ismissing(T));
-disp(table(T.Properties.VariableNames', missing_counts', ...
-    'VariableNames', {'Column', 'MissingCount'}));
-
-% Keep only rows with valid band gap (also filters metals, gap = 0)
-T = T(T.gap_gllbsc > 0, :);
-fprintf('Compounds after filtering: %d\n', height(T));
-
-%% ── 2. Feature engineering — compositional descriptors ────────────────
-% Hypothesis: band gap depends on orbital overlap, which is governed by
-% electronegativity differences, atomic size, and valence electron count.
-props = element_props();
-feature_names = {'Mean EN', 'Std EN', 'Mean Radius', 'Mean Valence', 'Radius Ratio'};
-
-n_compounds = height(T);
-n_features  = 5;
-X = zeros(n_compounds, n_features);
+%% 1. Load data
+T = readtable(fullfile('..', 'data', 'double_perovskites_gap.csv'), 'TextType', 'char');
+T = T(~isnan(T.gap_gllbsc) & T.gap_gllbsc > 0, :);
 y = T.gap_gllbsc;
+n = height(T);
+fprintf('Compounds: %d (gap > 0)\n', n);
 
-for i = 1:n_compounds
-    formula = T.formula{i};                      % e.g. 'AgNbLaAlO6'
-    [elements, counts] = parse_formula(formula);
+%% 2. Features
+props = element_props();
+[info, Atab, Btab, RO] = site_props();
+Xbase = zeros(n, 5);
+Xsite = zeros(n, 49);
+for i = 1:n
+    Xbase(i, :) = baseline_features(T.formula{i}, props);
+    [Xsite(i, :), siteNames] = site_features(T.a1{i}, T.b1{i}, T.a2{i}, T.b2{i}, info, Atab, Btab, RO);
+end
 
-    EN      = zeros(1, numel(elements));
-    radius  = zeros(1, numel(elements));
-    valence = zeros(1, numel(elements));
-    for j = 1:numel(elements)
-        if ~isfield(props, elements{j})
-            error('No element data for ''%s'' in formula ''%s''.', ...
-                elements{j}, formula);
-        end
-        ep = props.(elements{j});
-        EN(j)      = ep(2);
-        radius(j)  = ep(3);
-        valence(j) = ep(4);
+pyFeat = fullfile(outDir, 'site_features_python.csv');
+if exist(pyFeat, 'file')
+    P = readtable(pyFeat, 'TextType', 'char');
+    assert(isequal(P.formula, T.formula), 'Row order differs from Python feature file.');
+    maxDiff = max(abs(table2array(P(:, 2:end)) - Xsite), [], 'all');
+    assert(maxDiff < 1e-9, 'Site features differ from Python (max |diff| = %g).', maxDiff);
+    fprintf('Site features match Python to %.1e\n', maxDiff);
+end
+
+%% 3. Grouped folds (site-relabelled duplicates share a group)
+pyFolds = fullfile(outDir, 'cv_folds.csv');
+if exist(pyFolds, 'file')
+    F = readtable(pyFolds, 'TextType', 'char');
+    assert(isequal(F.formula, T.formula), 'Row order differs from Python fold file.');
+    fold = F.fold;
+    fprintf('Using Python CV folds (%s)\n', pyFolds);
+else
+    key = cell(n, 1);
+    for i = 1:n
+        a = sort({T.a1{i}, T.a2{i}});
+        b = sort({T.b1{i}, T.b2{i}});
+        key{i} = strjoin([a, {'|'}, b], ',');
     end
-
-    w = counts / sum(counts);                    % stoichiometric weights
-    X(i,1) = sum(w .* EN);                       % mean electronegativity
-    X(i,2) = std(EN, 1);                         % EN diversity (population std)
-    X(i,3) = sum(w .* radius);                   % mean atomic radius
-    X(i,4) = sum(w .* valence);                  % mean valence electrons
-    X(i,5) = max(radius) / min(radius);          % radius ratio
+    fold = group_folds(key, K, SEED);
+    fprintf('Python fold file not found; built grouped folds in MATLAB\n');
 end
 
-%% ── 3. Clean, split, THEN normalize ───────────────────────────────────
-valid = all(~isnan(X), 2) & ~isnan(y);
-X = X(valid, :);  y = y(valid);
-fprintf('Final dataset: %d compounds\n', length(y));
+%% 4. Grouped K-fold CV: 3 models x 2 feature sets
+featureSets = {Xbase, Xsite};
+fsNames = {'baseline (5)', 'site-resolved (49)'};
+modelNames = {'Linear (fitlm)', 'Random forest (TreeBagger)', 'SVM RBF (fitrsvm)'};
+rows = {};
+oof = cell(2, 3);
+fprintf('\n%-20s %-28s %16s %18s\n', 'Features', 'Model', 'R2', 'RMSE (eV)');
+for s = 1:2
+    X = featureSets{s};
+    for m = 1:3
+        pred = zeros(n, 1);
+        r2 = zeros(K, 1); rmse = r2; mae = r2;
+        for k = 1:K
+            te = (fold == k); tr = ~te;
+            [Xtr, Xte] = standardize_train(X(tr, :), X(te, :));
+            pred(te) = fit_predict(m, Xtr, y(tr), Xte, SEED);
+            [r2(k), rmse(k), mae(k)] = metrics(y(te), pred(te));
+        end
+        oof{s, m} = pred;
+        fprintf('%-20s %-28s %7.3f +- %.3f %8.3f +- %.3f\n', fsNames{s}, modelNames{m}, ...
+            mean(r2), std(r2), mean(rmse), std(rmse));
+        rows(end + 1, :) = {fsNames{s}, modelNames{m}, mean(r2), std(r2), mean(rmse), std(rmse), mean(mae), std(mae)}; %#ok<SAGROW>
+    end
+end
+cvTable = cell2table(rows, 'VariableNames', ...
+    {'features', 'model', 'R2_mean', 'R2_sd', 'RMSE_mean_eV', 'RMSE_sd_eV', 'MAE_mean_eV', 'MAE_sd_eV'});
+writetable(cvTable, fullfile(outDir, 'cv_results_matlab.csv'));
 
-rng(42);                           % reproducible split
-cv = cvpartition(length(y), 'HoldOut', 0.2);
+%% 5. Leave-one-element-out (TreeBagger)
+elements = unique([T.a1; T.a2; T.b1; T.b2]);
+loeoRows = {};
+fprintf('\nLeave-one-element-out, random forest (pooled over %d cations)\n', numel(elements));
+for s = 1:2
+    X = featureSets{s};
+    yAll = []; pAll = [];
+    for e = 1:numel(elements)
+        el = elements{e};
+        te = strcmp(T.a1, el) | strcmp(T.a2, el) | strcmp(T.b1, el) | strcmp(T.b2, el);
+        [Xtr, Xte] = standardize_train(X(~te, :), X(te, :));
+        yAll = [yAll; y(te)]; %#ok<AGROW>
+        pAll = [pAll; fit_predict(2, Xtr, y(~te), Xte, SEED)]; %#ok<AGROW>
+    end
+    [r2, rmse, mae] = metrics(yAll, pAll);
+    fprintf('%-20s R2 %.3f  RMSE %.3f eV  MAE %.3f eV\n', fsNames{s}, r2, rmse, mae);
+    loeoRows(end + 1, :) = {fsNames{s}, 'Random forest (TreeBagger)', r2, rmse, mae}; %#ok<SAGROW>
+end
+writetable(cell2table(loeoRows, 'VariableNames', {'features', 'model', 'R2', 'RMSE_eV', 'MAE_eV'}), ...
+    fullfile(outDir, 'loeo_results_matlab.csv'));
 
-% Normalize using TRAINING statistics only. zscore() on the full matrix
-% before splitting leaked test-set mean/std into training (data leakage).
-% mu/sigma are kept to score new compounds.
-mu    = mean(X(cv.training, :), 1);
-sigma = std(X(cv.training, :), 0, 1);
-sigma(sigma == 0) = 1;             % guard constant features
-X_tr = (X(cv.training, :) - mu) ./ sigma;  y_tr = y(cv.training);
-X_te = (X(cv.test,     :) - mu) ./ sigma;  y_te = y(cv.test);
-fprintf('Train: %d  Test: %d\n', sum(cv.training), sum(cv.test));
-
-%% ── 4. Train three models ──────────────────────────────────────────────
-% Model 1: Linear Regression (baseline)
-mdl_lm  = fitlm(X_tr, y_tr);
-yhat_lm = predict(mdl_lm, X_te);
-[R2_lm, RMSE_lm] = compute_metrics(y_te, yhat_lm);
-
-% Model 2: Random Forest
-mdl_rf = TreeBagger(100, X_tr, y_tr, ...
-    'Method',                 'regression', ...
-    'OOBPrediction',          'on', ...
-    'OOBPredictorImportance', 'on', ...
-    'MinLeafSize',            5);
-yhat_rf = predict(mdl_rf, X_te);   % regression TreeBagger returns doubles
-[R2_rf, RMSE_rf] = compute_metrics(y_te, yhat_rf);
-
-% Model 3: Support Vector Regression (RBF kernel)
-% KernelScale 'auto' picks the scale heuristically instead of the default
-% of 1, which under-fits when features have different effective spreads.
-mdl_svm  = fitrsvm(X_tr, y_tr, 'KernelFunction', 'rbf', ...
-    'KernelScale', 'auto', 'Standardize', false);
-yhat_svm = predict(mdl_svm, X_te);
-[R2_svm, RMSE_svm] = compute_metrics(y_te, yhat_svm);
-
-% Comparison table
-fprintf('\n%-20s %8s %8s\n', 'Model', 'R2', 'RMSE');
-fprintf('%-20s %8.3f %8.3f\n', 'Linear Regression', R2_lm,  RMSE_lm);
-fprintf('%-20s %8.3f %8.3f\n', 'Random Forest',     R2_rf,  RMSE_rf);
-fprintf('%-20s %8.3f %8.3f\n', 'SVM (RBF)',         R2_svm, RMSE_svm);
-
-comparison = table( ...
-    {'Linear Regression'; 'Random Forest'; 'SVM (RBF)'}, ...
-    [R2_lm; R2_rf; R2_svm], [RMSE_lm; RMSE_rf; RMSE_svm], ...
-    'VariableNames', {'Model', 'R2', 'RMSE_eV'});
-if ~exist(fullfile('..', 'output'), 'dir'), mkdir(fullfile('..', 'output')); end
-writetable(comparison, fullfile('..', 'output', 'model_comparison_matlab.csv'));
-
-%% ── 5. Figure 1: Predicted vs actual (3 models) ───────────────────────
-fig1 = figure('Units', 'inches', 'Position', [0 0 12 4], 'Color', 'white');
-models     = {yhat_lm, yhat_rf, yhat_svm};
-modelnames = {'Linear Regression', 'Random Forest', 'SVM (RBF)'};
-R2s        = [R2_lm, R2_rf, R2_svm];
-colors     = {[0.2 0.5 0.8], [0.1 0.6 0.3], [0.8 0.3 0.2]};
-
-for m = 1:3
-    subplot(1, 3, m);
-    scatter(y_te, models{m}, 20, colors{m}, 'filled', 'MarkerFaceAlpha', 0.6);
-    hold on;
-    lims = [min(y_te)*0.9, max(y_te)*1.1];
-    plot(lims, lims, 'k--', 'LineWidth', 1);
-    xlabel('Actual Band Gap (eV)', 'FontSize', 10);
-    ylabel('Predicted Band Gap (eV)', 'FontSize', 10);
-    title(sprintf('%s\nR^2 = %.3f', modelnames{m}, R2s(m)), ...
+%% 6. Figure: parity, baseline RF vs site-resolved RF (out-of-fold)
+fig = figure('Units', 'inches', 'Position', [0 0 10 4.6], 'Color', 'white');
+titles = {'Baseline features', 'Site-resolved features'};
+for s = 1:2
+    subplot(1, 2, s);
+    scatter(y, oof{s, 2}, 10, [0.18 0.43 0.70], 'filled', 'MarkerFaceAlpha', 0.5);
+    hold on; plot([0 9], [0 9], 'k--', 'LineWidth', 1);
+    [r2, rmse] = metrics(y, oof{s, 2});
+    title(sprintf('%s, TreeBagger\nR^2 = %.3f, RMSE = %.2f eV (pooled OOF)', titles{s}, r2, rmse), ...
         'FontWeight', 'normal', 'FontSize', 10);
-    xlim(lims); ylim(lims); axis square; box off;
+    xlabel('GLLB-SC band gap (eV)'); ylabel('Predicted, out-of-fold (eV)');
+    xlim([0 9]); ylim([0 9]); axis square; box off;
 end
-exportgraphics(fig1, fullfile('..', 'output', 'predicted_vs_actual.png'), 'Resolution', 300);
+exportgraphics(fig, fullfile(outDir, 'parity_matlab.png'), 'Resolution', 200);
+fprintf('\nWrote cv_results_matlab.csv, loeo_results_matlab.csv, parity_matlab.png to output/\n');
 
-%% ── 6. Figure 2: Feature importance (Random Forest, OOB permutation) ──
-importance = mdl_rf.OOBPermutedPredictorDeltaError;
-[sorted_imp, idx] = sort(importance, 'descend');
+%% ── Helpers ─────────────────────────────────────────────────────────────
+function [Xtr, Xte] = standardize_train(Xtr, Xte)
+    % z-score with TRAINING statistics only (no test-set leakage)
+    mu = mean(Xtr, 1);
+    sd = std(Xtr, 0, 1);
+    sd(sd == 0) = 1;
+    Xtr = (Xtr - mu) ./ sd;
+    Xte = (Xte - mu) ./ sd;
+end
 
-fig2 = figure('Units', 'inches', 'Position', [0 0 6 4], 'Color', 'white');
-barh(flip(sorted_imp), 'FaceColor', [0.2 0.6 0.4]);
-set(gca, 'YTickLabel', flip(feature_names(idx)), 'Box', 'off', 'TickDir', 'out');
-xlabel('Increase in OOB MSE when permuted', 'FontSize', 10);
-title('Feature Importance — Random Forest', 'FontWeight', 'normal');
-exportgraphics(fig2, fullfile('..', 'output', 'feature_importance.png'), 'Resolution', 300);
+function yhat = fit_predict(model, Xtr, ytr, Xte, seed)
+    switch model
+        case 1
+            yhat = predict(fitlm(Xtr, ytr), Xte);
+        case 2
+            rng(seed);
+            mdl = TreeBagger(200, Xtr, ytr, 'Method', 'regression', 'MinLeafSize', 5, ...
+                'NumPredictorsToSample', ceil(size(Xtr, 2) / 3));
+            yhat = predict(mdl, Xte);
+        case 3
+            mdl = fitrsvm(Xtr, ytr, 'KernelFunction', 'gaussian', 'KernelScale', 'auto', 'Standardize', false);
+            yhat = predict(mdl, Xte);
+    end
+end
 
-fprintf('\nFigures and comparison table saved to output/\n');
-
-%% ── Helper ─────────────────────────────────────────────────────────────
-function [R2, RMSE] = compute_metrics(y_true, y_pred)
-    SS_res = sum((y_true - y_pred).^2);
-    SS_tot = sum((y_true - mean(y_true)).^2);
-    R2   = 1 - SS_res / SS_tot;
-    RMSE = sqrt(mean((y_true - y_pred).^2));
+function [R2, RMSE, MAE] = metrics(yTrue, yPred)
+    err = yTrue - yPred;
+    R2 = 1 - sum(err .^ 2) / sum((yTrue - mean(yTrue)) .^ 2);
+    RMSE = sqrt(mean(err .^ 2));
+    MAE = mean(abs(err));
 end

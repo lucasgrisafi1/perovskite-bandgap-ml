@@ -1,4 +1,0 @@
-model,R2,RMSE_eV
-Linear Regression,0.2390,1.4190
-Random Forest,0.5999,1.0289
-Kernel Ridge (RBF),0.5650,1.0729
